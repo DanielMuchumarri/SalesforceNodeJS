@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 dotenv.config()
 
 const app = express()
-const PORT = 3001
+const PORT = 3002
 
 //Salesforc connection
 const {SF_LOGIN_URL, SF_USERNAME, SF_PASSWORD, SF_TOKEN}=process.env
@@ -66,9 +66,9 @@ let createSnapShotDB = async dbName =>{
     await setDB.then((result)=>{
         console.log('Database Switch is Successfull:::' + JSON.stringify(result));
     });
-    await createMetadataTablePromise().then((result)=>{
-        console.log(':::: Table created successfully ::::' + JSON.stringify(result));
-    });
+    // await createMetadataTablePromise().then((result)=>{
+    //     console.log(':::: Table created successfully ::::' + JSON.stringify(result));
+    // });
     console.log(4);
  
     // Salesforce Describe Metadata Callout
@@ -77,12 +77,178 @@ let createSnapShotDB = async dbName =>{
     console.log(metaData.metadataObjects);
     console.log(5);
 
-    await insertMetadata(metaData.metadataObjects).then((result)=>{
-        console.log('Record is inserted successfully');
-        console.log(JSON.stringify(result));
-    });
+    //  await insertMetadata(metaData.metadataObjects).then((result)=>{
+    //      console.log('Record is inserted successfully');
+    //      console.log(JSON.stringify(result));
+    //  });
+
+    //Call promise that creates MetadataList table
+    await createMetadataListTablePromise().then((response)=>console.log('MetadataList table created successfully'+JSON.stringify(response)));
+
+    let metadataList = [];
+    let metadataResult = [];
+
+ //   let mData = metaData.metadataObjects;
+
+    // mData.forEach(obj=>{
+    //     processMetadataList(obj.xmlName,metadataList);
+    // });
+
+    let callOutFetchArray = processMetadataList(metaData.metadataObjects);
+    //console.log('1111:::::'+callOutFetchArray);
+    // await Promise.all([callOutArray]).then((result)=>{
+    //     // result.forEach(obj=>{
+    //     //     console.log(obj);
+    //     //     obj.json().then((rsp)=>console.log(resp));
+    //     //     //obj.then((rst)=>console.log(rst));
+    //     // });
+    //     //result.json().then((rsp)=>console.log(rsp));
+    // });
+    await callOutPromise(callOutFetchArray).then(result=>metadataResult.push([...result]));
+    console.log('33333333:::')    
+
+    await callOutPromiseRespProcess(metadataResult).then(result=>{
+        console.log('%%%%%%%%%%%%%%%%%%%%%');
+        console.log(result);
+
+    });    
+
+    console.log('MetadataList Size :::' + metadataList.length);
 
 }
+
+
+
+//Process Callout Promise Response
+
+let callOutPromiseRespProcess = async (metadataResult)=>{
+
+    let tmpMetadataList = [];
+
+    metadataResult.forEach(resultList=>{
+
+        resultList.forEach(rPromiseList=>{
+            rPromiseList.forEach(
+                (result)=>{
+                    result.then(
+                        res=>{
+                            console.log(res.json().then(
+                                rs=>{
+                                    if(Array.isArray(rs)){
+                                        rs.forEach(r=>{
+                                            console.log(r)
+                                        })
+                                    }else{
+                                        console.log(rs);
+                                    }
+                                    
+                                }))
+                        }
+                    )
+                }
+            )
+        });
+
+
+
+        // resultList.forEach(rList=>{
+        //     //m.then(r=>console.log(r));
+        //     rList.forEach(k=>{
+        //         k.then(data=>data.json().then(i=>{   
+        //             //resolve(i);                 
+        //             if(Array.isArray(i)){
+        //                 i.forEach(j=>{
+        //                     //console.log('&&&&&&&&&&&&&&&&&&');
+        //                     tmpMetadataList.push(j);
+        //                 });
+        //             }else{
+        //                 //console.log('***************************');
+        //                 tmpMetadataList.push(i);
+        //             }
+        //         }));
+        //     });
+        // });        
+    });
+
+    return new Promise((resolve,reject)=>{
+        if(tmpMetadataList !== null && tmpMetadataList !== undefined && tmpMetadataList.length > 0){
+            console.log('******Resolve*****************');
+            console.log(tmpMetadataList.length);
+            resolve(tmpMetadataList);
+        }
+    });
+}
+
+
+//MetadataList Callout Promise
+
+let callOutPromise = (callOutFetchArray)=>{
+    return new Promise((resolve,response)=>{
+        Promise.all([callOutFetchArray]).then((result)=>{resolve(result)});
+    });
+}   
+
+
+//Process Metadata and perform callout to get MetadataList and insert into MetadataList table
+let processMetadataList = (metadata)=>{
+    // return new Promise.all((resolve,reject)=>{
+    //     metadata.forEach(data=>{
+    //         await fetch(`http://localhost:${PORT}/MetadataList?mType=${data.xmlName}`).then((resp)=>{console.log(`Success ${data.xmlName}:`+JSON.stringify(resp))}).catch((err)=>{console.log(`Error ${data.xmlName}:`+JSON.stringify(err))});
+    //     });
+    // });
+
+    let pArray = [];
+
+    // metadata.forEach(data=>{
+    //     pArray.push(fetch(`http://localhost:${PORT}/MetadataList?mType=${data.xmlName}`).then((resp)=>{console.log(`Success ${data.xmlName}:`+JSON.stringify(resp))}).catch((err)=>{console.log(`Error ${data.xmlName}:`+JSON.stringify(err))}));
+    // });
+
+    // Promise.allSettled(pArray).then((result)=>console.log(JSON.stringify(result)));
+
+    // let response = await fetch(`http://localhost:${PORT}/MetadataList?mType=ApexClass`);
+    // let dataList = await response.json();
+    // console.log(dataList);
+    //let metadataList = [];
+
+    // metadata.forEach(data=>{
+    //     pArray.push(fetch(`http://localhost:${PORT}/MetadataList?mType=${data.xmlName}`).then((response)=>{
+    //         response.json().then((resp)=>{
+    //          if(resp !== null && resp !== undefined && resp.length > 0){
+    //             console.log('Hello1::' + data.xmlName + ':::::' + resp.length);
+    //             metadataList.push(...resp)
+    //          }
+    //          });       
+    //      }));
+    // });
+
+    metadata.forEach(data=>{
+        pArray.push(fetch(`http://localhost:${PORT}/MetadataList?mType=${data.xmlName}`));
+    });
+
+    return pArray;
+
+    
+        // await fetch(`http://localhost:${PORT}/MetadataList?mType=${xmlName}`).then((response)=>{
+        //         response.json().then((resp)=>{
+        //             if(resp !== null && resp !== undefined && resp.length > 0){
+        //                 console.log('Hello1::' + xmlName + ':::::' + resp.length);
+        //                 metadataList.push(...resp)
+        //             }
+        //         });       
+        // });
+    
+
+
+    //Promise.allSettled(pArray).then((result)=>console.log(JSON.stringify(result)));
+
+    
+
+    // const response = await fetch('http://localhost:3001/DescribeMetaData');
+    // let metaData = await response.json();
+}
+
+
+
 
 //Insert metadata into MetadataObjects Table
 let insertMetadata = (metaData)=>{    
@@ -164,6 +330,17 @@ let createMetadataTablePromise = ()=>{
         });
     });
 }
+
+//Create MetadataList Table
+let createMetadataListTablePromise = ()=>{
+    return new Promise((resolve,reject)=>{
+        mySQLCon.query('CREATE TABLE MetadataList(createdById Varchar(255),createdByName Varchar(255),createdDate Varchar(255),fileName Varchar(255),fullName Varchar(255),id Varchar(255),lastModifiedById Varchar(255),lastModifiedByName Varchar(255),lastModifiedDate Varchar(255),manageableState Varchar(255),type Varchar(255))',function(err,result){
+            if(err) reject(err);
+            resolve(result);
+        });
+    });
+}
+
 
 //Salesforce API Get Methods
 app.get('/',(req,res)=>{
@@ -272,24 +449,33 @@ app.get('/DescribeMetaData',(req,res)=>{
 })
 
 app.get("/MetadataList",(req,res)=>{
-    var types = [{type : 'CustomObject',folder:null}];
+    //console.log('Inside Metadata List::0' +req.query.mType );
+    var types = [{type : req.query.mType,folder:null}];
+    //console.log('Inside Metadata List::1');
     conn.metadata.list(types,'52.0',function(err,metadata){
-        res.json(metadata);
+        //console.log('Inside Metadata List::2');
+        
+        //let jsonResponse = res.json(metadata);
+        //console.log('Inside Metadata List::3' + JSON.stringify(metadata));
         if(err){return console.error('err',err);}
-        var meta = metadata[0];
-        console.log('metadata count : ' + metadata.length);
-        console.log('createdById : ' + meta.createdById);
-        console.log('createdByName : ' + meta.createdByName);
-        console.log('createdDate : ' + meta.createdDate);
-        console.log('fileName : ' + meta.fileName);
-        console.log('fullName : ' + meta.fullName);
-        console.log('id : ' + meta.id);
-        console.log('lastModifiedById : ' + meta.lastModifiedById);
-        console.log('lastModifiedByName : ' + meta.lastModifiedByName);
-        console.log('lastModifiedDate : ' + meta.lastModifiedDate);
-        console.log('manageableState : ' + meta.manageableState);
-        console.log('namespacePrefix : ' + meta.namespacePrefix);
-        console.log('type : ' + meta.type);
+        if(metadata !== null && metadata !== undefined){
+            res.json(metadata);
+        }
+        
+        // var meta = metadata[0];
+        // console.log('metadata count : ' + metadata.length);
+        // console.log('createdById : ' + meta.createdById);
+        // console.log('createdByName : ' + meta.createdByName);
+        // console.log('createdDate : ' + meta.createdDate);
+        // console.log('fileName : ' + meta.fileName);
+        // console.log('fullName : ' + meta.fullName);
+        // console.log('id : ' + meta.id);
+        // console.log('lastModifiedById : ' + meta.lastModifiedById);
+        // console.log('lastModifiedByName : ' + meta.lastModifiedByName);
+        // console.log('lastModifiedDate : ' + meta.lastModifiedDate);
+        // console.log('manageableState : ' + meta.manageableState);
+        // console.log('namespacePrefix : ' + meta.namespacePrefix);
+        // console.log('type : ' + meta.type);
     });
 })
 
