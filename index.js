@@ -1,16 +1,21 @@
 
-//Salesforce Libraries
-//import fetch from 'node-fetch';
+/**Salesforce Libraries*/
 import express from 'express';
 import jsforce from 'jsforce';
+
+/**Load Env file*/
 import dotenv from 'dotenv';
-//import { CLIENT_MULTI_RESULTS } from 'node_modules\\mysql\\lib\\protocol\\constants\\client.js';
+import fetch from 'node-fetch';
+
+/**MySQL Libraries*/
+import mysql from 'mysql2';
 dotenv.config()
 
+/**Setup Port on which Node will run*/
 const app = express()
-const PORT = 3002
+const PORT = 3003
 
-//Salesforc connection
+/**Salesforce connection*/
 const {SF_LOGIN_URL, SF_USERNAME, SF_PASSWORD, SF_TOKEN}=process.env
 const conn = new jsforce.Connection({
     loginUrl:SF_LOGIN_URL
@@ -22,238 +27,238 @@ conn.login(SF_USERNAME,SF_PASSWORD+SF_TOKEN,(err,userInfo)=>{
     }else{
         console.log('User Id:' + userInfo.id)
         console.log('Org Id:' + userInfo.organizationId)
-        //processFetchMetadataData();
+        //Create a database after successfully establishing Salesforce Connection. This call will later be done separately
         createSnapShotDB('LTIMindtree');
     }
 })
 
-//const fetch = require('node-fetch');
-import fetch from 'node-fetch';
-
-//MySQL Libraries
-import mysql from 'mysql2';
-//import mysql from 'mysql2-json-sql';
-//MySQL connection
+/**MySQL connection*/
 var mySQLCon = mysql.createConnection({
     host:"localhost",
     user:"root",
     password:"Sfdc@12345"
 })
+
 mySQLCon.connect(function(err){
     if(err) throw err;
     console.log('MYSQL Connection Established Successfully');
 })
 
-//Start : MySQL Methods
-
-//Reset MySQL database
+/*Call to this method performs below tasks
+    1. Creates a new database 
+    2. Sets the context of running user to the new database
+    3. Call createMetadataTypesTablePromise to create the Salesforce MetadataType table in the DB
+    4. Call below API to fetch all MetadataTypes from Salesforce
+    5. Insert Metadatatypes into MetadataTypes table
+    6. Call promise that creates MetadataCatalog table
+    6.1 Prepare for MetadataCatalog Callout
+    7. Insert MetadataCatalog in MySQL database table
+*/
 let createSnapShotDB = async dbName =>{
+    
     let curDt =new Date(Date.now());
     let dt = curDt.getDate();
-    let month = curDt.getMonth();
+    let month = curDt.getMonth()+1;
     let fYear = curDt.getFullYear();
     let hrs = curDt.getHours();
     let mins = curDt.getMinutes();
     let secs = curDt.getSeconds();
     let customDBName = dbName + dt + month + fYear + hrs + mins + secs;
-    console.log(1);
+    
+    /* 1. Call ceateDB method to send request to MYSQL database for creation of new DB*/
     let cDB = createDB(customDBName);
-    console.log(2);
     await cDB.then((result)=>console.log(JSON.stringify(result)));    
-    console.log(3);
     console.log(':::: Database is created successfully ::::');
+    
+    /* 2. Call contextDB method to set the context to the new Database created above*/
     let setDB = contextDB(customDBName);
     await setDB.then((result)=>{
         console.log('Database Switch is Successfull:::' + JSON.stringify(result));
     });
-    // await createMetadataTablePromise().then((result)=>{
-    //     console.log(':::: Table created successfully ::::' + JSON.stringify(result));
-    // });
-    console.log(4);
- 
-    // Salesforce Describe Metadata Callout
-    const response = await fetch('http://localhost:3001/DescribeMetaData');
+    
+    /* 3. Call createMetadataTypesTablePromise to create the Salesforce MetadataType table in the DB*/
+    await createMetadataTypesTablePromise().then((result)=>{
+        console.log(':::: Table created successfully ::::' + JSON.stringify(result));
+    });
+    
+    /* 4. Call below API to fetch all MetadataTypes from Salesforce*/
+    const response = await fetch(`http://localhost:${PORT}/DescribeMetaData`);
     let metaData = await response.json();
-    console.log(metaData.metadataObjects);
     console.log(5);
-
-    //  await insertMetadata(metaData.metadataObjects).then((result)=>{
-    //      console.log('Record is inserted successfully');
-    //      console.log(JSON.stringify(result));
-    //  });
-
-    //Call promise that creates MetadataList table
-    await createMetadataListTablePromise().then((response)=>console.log('MetadataList table created successfully'+JSON.stringify(response)));
-
-    let metadataList = [];
+    
+    /** 5. Insert Metadatatypes into MetadataTypes table */
+    await insertMetadataTypes(metaData.metadataObjects).then((result)=>{
+         console.log('Record is inserted successfully');
+         console.log(JSON.stringify(result));
+     });
+    
+    /** 6. Call promise that creates MetadataCatalog Table*/
+    await createMetadataCatalogTablePromise().then((response)=>console.log('MetadataCatalog table created successfully'+JSON.stringify(response)));
+    let metadataCatalog = [];
     let metadataResult = [];
-
- //   let mData = metaData.metadataObjects;
-
-    // mData.forEach(obj=>{
-    //     processMetadataList(obj.xmlName,metadataList);
-    // });
-
-    let callOutFetchArray = processMetadataList(metaData.metadataObjects);
-    //console.log('1111:::::'+callOutFetchArray);
-    // await Promise.all([callOutArray]).then((result)=>{
-    //     // result.forEach(obj=>{
-    //     //     console.log(obj);
-    //     //     obj.json().then((rsp)=>console.log(resp));
-    //     //     //obj.then((rst)=>console.log(rst));
-    //     // });
-    //     //result.json().then((rsp)=>console.log(rsp));
-    // });
-    await callOutPromise(callOutFetchArray).then(result=>metadataResult.push([...result]));
+    
+    /*** 6.1 Prepare for MetadataCatalog Callout */
+    await callOutMetadataCatalogPromise(metaData.metadataObjects).then(
+    result=>{
+        metadataCatalog.push([...result])
+    });
     console.log('33333333:::')    
+    console.log('MetadataCatalog Size :::' + metadataCatalog.flat().length);
+    
+    // 7. Insert MetadataCatalog in MySQL database table
+    await insertMetadataCatalog(metadataCatalog).then(result=>console.log('MetadataCatalog Insert Result ::::: '));
+    
+    // 8. Create tables for individual Metadata Types using metadataCatalog
+    
+    // 8.1 Create a set of metadata types
+    const mTypes = metadataCatalog[0].map(item => item.type);
+    console.log('mTypes ::: ' + JSON.stringify(mTypes));
+    let mTypeSet = [...new Set(mTypes)];
 
-    await callOutPromiseRespProcess(metadataResult).then(result=>{
-        console.log('%%%%%%%%%%%%%%%%%%%%%');
-        console.log(result);
+    /* 8.2 
+        1. Iterate through MetaData Type Set
+        2. Identify individual metadata records
+        3. Perform bulk parallel callouts for each metadata type
+        4. Process the response of each MetadataType and insert the records into table
+    */
+    //
+    // mTypeSet = ['CustomObject'];
+    // mTypeSet.forEach(async mtype=> {
+    //     const filteredData = metadataCatalog[0].filter(meta => meta.type == mtype);
+    //     console.log('Filtered Values :::' + JSON.stringify(filteredData));
+    //     callOutBridgeAwait(filteredData);
+    // })
 
-    });    
+    await callOutMetadataTypeAndName(metadataCatalog[0]).then(
+                result=>{
+                    console.log(result);
+                });    
+    console.log('CallOutBridgeAwait *******');
 
-    console.log('MetadataList Size :::' + metadataList.length);
+    // 8.3 
+    console.log('444444::::::');
 
 }
 
+//metadata?type=CustomObject&name=PaymentMethod
 
 
-//Process Callout Promise Response
+/***Callout Bridge to facilitate Await */
 
-let callOutPromiseRespProcess = async (metadataResult)=>{
+// let callOutBridgeAwait = async (filteredData) =>{
+//     await callOutMetadataTypeAndName(filteredData).then(
+//         result=>{
+//             console.log(result);
+//         });    
+//     console.log('CallOutBridgeAwait *******');
+// }
 
-    let tmpMetadataList = [];
 
-    metadataResult.forEach(resultList=>{
+/*** Callout to get Metadata of specific type*/
+let callOutMetadataTypeAndName = async (metadataCatalog,mTypeSet)=>{
+    // const keys = Object.keys(metadataCatalog);
+     mTypeSet = ['CustomObject','Role']
+    // mTypeSet.forEach(async mtype=> {
+    //     const filteredData = metadataCatalog.filter(meta => meta.type == mtype);
+    //     console.log('Filtered Values :::' + JSON.stringify(filteredData));
+    //     // const apiPromises = filteredData.map(item => {
+    //     //     const url = `http://localhost:${PORT}/metadata?type=${item.type}&name=${item.fullName}`;
+    //     //     return fetch(url).then(response => response.json());
+    //     // });
+    //     // await Promise.all(apiPromises).then(results => {
+    //     //     console.log('Results convertJSONToTables :::' + JSON.stringify(results));
+    //     //   });
 
-        resultList.forEach(rPromiseList=>{
-            rPromiseList.forEach(
-                (result)=>{
-                    result.then(
-                        res=>{
-                            console.log(res.json().then(
-                                rs=>{
-                                    if(Array.isArray(rs)){
-                                        rs.forEach(r=>{
-                                            console.log(r)
-                                        })
-                                    }else{
-                                        console.log(rs);
-                                    }
-                                    
-                                }))
-                        }
-                    )
+        return new Promise(async (resolve,reject)=>{            
+            let conResult = [];
+            mTypeSet.forEach(async mtype=> {
+                const filteredData = metadataCatalog.filter(meta => meta.type == mtype);
+                console.log('Filtered Values :::' + JSON.stringify(filteredData));
+
+                await Promise.all( filteredData.map(item =>
+                    fetch(`http://localhost:${PORT}/metadata?type=${item.type}&name=${item.fullName}`)
+                    .then(
+                        resp=>resp.json()
+                        .then(
+                            obj=>{
+                                let tmpObj = {...obj};
+                                tmpObj['metaType']=item.type;
+                                return tmpObj;
+                            }
+                            )
+                        ).catch(()=>null)
+                    )).then(result=>{
+                        let finalResult = result.flat();
+                        conResult.push(finalResult);
+                });
+            })
+            if(conResult !== null && conResult !== undefined && conResult.length>0){
+                let metaTypes = conResult.map(item => item.metaType);
+                let metTypeSet = new Set(metaTypes);
+                if(metTypeSet.length == mTypeSet.length){
+                    resolve(conResult);
                 }
-            )
+            }
+        })         
+}
+
+
+/**MetadataCatalog Callout Promise*/
+let callOutMetadataCatalogPromise = async (metadata)=>{
+    let mTypeList = [];
+    let i=0;
+    let eliminatedTypes = ['EntitlementTemplate','MLDataDefinition','PlatformEventChannel','PlatformEventChannelMember',
+                            'CallCenter','MilestoneType','EntitlementProcess','AppointmentSchedulingPolicy',
+                        'CanvasMetadata','MobileApplicationDetail','CustomNotificationType','ConnectedApp','AppMenu',
+                    'NotificationTypeConfig','DelegateGroup','BrandingSet','ManagedContentType','SiteDotCom',
+                    'NetworkBranding','FlowCategory','LightningBolt','LightningExperienceTheme','LightningOnboardingConfig',
+                    'CustomHelpMenuSection','Prompt','SamlSsoConfig','CorsWhitelistOrigin','ActionLinkGroupTemplate',
+                    'TransactionSecurityPolicy','SynonymDictionary','PathAssistant','AnimationRule','LeadConvertSettings',
+                    'LiveChatSensitiveDataRule','PlatformCachePartition','TopicsForObjects','AccessControlPolicy',
+                    'RestrictionRule','FieldRestrictionRule','RecommendationStrategy','EntityImplements','EmailServicesFunction',
+                    'PaymentGatewayProvider','GatewayProviderPaymentMethodType','RecordActionDeployment','EmbeddedServiceConfig',
+                    'EmbeddedServiceBranding','EmbeddedServiceFlowConfig','EmbeddedServiceMenuSettings','CallCoachingMediaProvider',
+                    'PlatformEventSubscriberConfig','Settings'
+                ]
+    metadata.forEach(meta=>{
+        if(!eliminatedTypes.includes(meta.xmlName)
+        ){                   
+            mTypeList.push(meta.xmlName)
+        }        
+    });
+    console.log(mTypeList);
+    return new Promise(async (resolve,reject)=>{
+    let results = await Promise.all( mTypeList.map(mType =>
+        fetch(`http://localhost:${PORT}/MetadataList?mType=${mType}`).then(resp=>resp.json().then(obj=>obj))
+        )).then(result=>{
+            let finalResult = result.flat();
+            resolve(finalResult);
+        });        
+    })
+}
+
+/**Insert metadata into MetadataCatalog Table*/
+let insertMetadataCatalog = (metaData)=>{    
+    let sqlData = metaData[0];//JSON.stringify(metaData);
+    let sql = `INSERT INTO MetadataCatalog(CreatedById,CreatedByName,CreatedDate,FileName,FullName,Id,LastModifiedById,LastModifiedByName,LastModifiedDate,ManageableState,Type) values ?`;
+    let prm;
+    if(sqlData !== null && sqlData !== undefined){
+        prm = new Promise((resolve,reject)=>{
+                mySQLCon.query(sql,
+                [sqlData.map(data=>[data.createdById,data.createdByName,data.createdDate,data.fileName,data.fullName,data.id,data.lastModifiedById,data.lastModifiedByName,data.lastModifiedDate,data.manageableState,data.type])],
+                function(err, result){
+                    if(err) reject(err);
+                    resolve(result);
+                });        
         });
-
-
-
-        // resultList.forEach(rList=>{
-        //     //m.then(r=>console.log(r));
-        //     rList.forEach(k=>{
-        //         k.then(data=>data.json().then(i=>{   
-        //             //resolve(i);                 
-        //             if(Array.isArray(i)){
-        //                 i.forEach(j=>{
-        //                     //console.log('&&&&&&&&&&&&&&&&&&');
-        //                     tmpMetadataList.push(j);
-        //                 });
-        //             }else{
-        //                 //console.log('***************************');
-        //                 tmpMetadataList.push(i);
-        //             }
-        //         }));
-        //     });
-        // });        
-    });
-
-    return new Promise((resolve,reject)=>{
-        if(tmpMetadataList !== null && tmpMetadataList !== undefined && tmpMetadataList.length > 0){
-            console.log('******Resolve*****************');
-            console.log(tmpMetadataList.length);
-            resolve(tmpMetadataList);
-        }
-    });
+    }    
+    return prm;
 }
 
-
-//MetadataList Callout Promise
-
-let callOutPromise = (callOutFetchArray)=>{
-    return new Promise((resolve,response)=>{
-        Promise.all([callOutFetchArray]).then((result)=>{resolve(result)});
-    });
-}   
-
-
-//Process Metadata and perform callout to get MetadataList and insert into MetadataList table
-let processMetadataList = (metadata)=>{
-    // return new Promise.all((resolve,reject)=>{
-    //     metadata.forEach(data=>{
-    //         await fetch(`http://localhost:${PORT}/MetadataList?mType=${data.xmlName}`).then((resp)=>{console.log(`Success ${data.xmlName}:`+JSON.stringify(resp))}).catch((err)=>{console.log(`Error ${data.xmlName}:`+JSON.stringify(err))});
-    //     });
-    // });
-
-    let pArray = [];
-
-    // metadata.forEach(data=>{
-    //     pArray.push(fetch(`http://localhost:${PORT}/MetadataList?mType=${data.xmlName}`).then((resp)=>{console.log(`Success ${data.xmlName}:`+JSON.stringify(resp))}).catch((err)=>{console.log(`Error ${data.xmlName}:`+JSON.stringify(err))}));
-    // });
-
-    // Promise.allSettled(pArray).then((result)=>console.log(JSON.stringify(result)));
-
-    // let response = await fetch(`http://localhost:${PORT}/MetadataList?mType=ApexClass`);
-    // let dataList = await response.json();
-    // console.log(dataList);
-    //let metadataList = [];
-
-    // metadata.forEach(data=>{
-    //     pArray.push(fetch(`http://localhost:${PORT}/MetadataList?mType=${data.xmlName}`).then((response)=>{
-    //         response.json().then((resp)=>{
-    //          if(resp !== null && resp !== undefined && resp.length > 0){
-    //             console.log('Hello1::' + data.xmlName + ':::::' + resp.length);
-    //             metadataList.push(...resp)
-    //          }
-    //          });       
-    //      }));
-    // });
-
-    metadata.forEach(data=>{
-        pArray.push(fetch(`http://localhost:${PORT}/MetadataList?mType=${data.xmlName}`));
-    });
-
-    return pArray;
-
-    
-        // await fetch(`http://localhost:${PORT}/MetadataList?mType=${xmlName}`).then((response)=>{
-        //         response.json().then((resp)=>{
-        //             if(resp !== null && resp !== undefined && resp.length > 0){
-        //                 console.log('Hello1::' + xmlName + ':::::' + resp.length);
-        //                 metadataList.push(...resp)
-        //             }
-        //         });       
-        // });
-    
-
-
-    //Promise.allSettled(pArray).then((result)=>console.log(JSON.stringify(result)));
-
-    
-
-    // const response = await fetch('http://localhost:3001/DescribeMetaData');
-    // let metaData = await response.json();
-}
-
-
-
-
-//Insert metadata into MetadataObjects Table
-let insertMetadata = (metaData)=>{    
+/**Insert into MetadataTypes Table*/
+let insertMetadataTypes = (metaData)=>{    
     let sqlData = metaData;//JSON.stringify(metaData);
-    let sql = `INSERT INTO MetadataObjects(DirectoryName,InFolder,MetaFile,Suffix,XmlName) values ?`;    
+    let sql = `INSERT INTO MetadataTypes(DirectoryName,InFolder,MetaFile,Suffix,XmlName) values ?`;    
     return new Promise((resolve,reject)=>{
         mySQLCon.query(sql,
         [sqlData.map(data=>[data.directoryName,data.inFolder,data.metaFile,data.suffix,data.xmlName])],
@@ -264,30 +269,7 @@ let insertMetadata = (metaData)=>{
     });
 }
 
-//Verify if Database with provide name exists in MYSQL server..
-let isDBExists = dbName => {
-    mySQLCon.query('SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA',function(err,result){
-        console.log('Result of Database names query :::' + JSON.stringify(result));  
-        let isMatchFound = false;
-        result.forEach(obj=>{
-            console.log(obj.SCHEMA_NAME);
-            if(obj.SCHEMA_NAME == dbName){
-                console.log('Inside If Statement...');
-                isMatchFound = true;
-            }
-        });
-
-        if(isMatchFound == true){
-            console.log('Database Match is Found:::');            
-        }else{
-            console.log('Database Match is not Found::::');
-        }
-
-        return isMatchFound;
-    });
-};
-
-//Create MySQL DB
+/**Create MySQL DB*/
 let createDB = dbName =>{
     return new Promise((resolve,reject)=>{
         mySQLCon.query(`CREATE DATABASE ${dbName}`,function(err,result){        
@@ -298,7 +280,7 @@ let createDB = dbName =>{
     });
 }
 
-//Set Context Database
+/**Set Context Database*/
 let contextDB = (dbName)=>{
     return new Promise((resolve,reject)=>{
         mySQLCon.query(`USE ${dbName}`,(error,results,fields)=>{
@@ -308,41 +290,27 @@ let contextDB = (dbName)=>{
     });
 }
 
-// Delete MySQL DB
-let delDB = dbName =>{
-    console.log(4);
+/*** Create MetadataTypes Table */
+let createMetadataTypesTablePromise = ()=>{
     return new Promise((resolve,reject)=>{
-        mySQLCon.query(`DROP DATABASE ${dbName}`,function(err,result){
-            if(err) reject(err);
-    
-            resolve(result);
-        });
-    });
-}
-
-//Create Metadata Table
-
-let createMetadataTablePromise = ()=>{
-    return new Promise((resolve,reject)=>{
-        mySQLCon.query('CREATE TABLE MetadataObjects(DirectoryName varchar(255),childXmlNames varchar(255),InFolder varchar(255),MetaFile varchar(255),Suffix varchar(255),XmlName varchar(255))',function(err,result){
+        mySQLCon.query('CREATE TABLE MetadataTypes(DirectoryName varchar(255),childXmlNames varchar(255),InFolder varchar(255),MetaFile varchar(255),Suffix varchar(255),XmlName varchar(255))',function(err,result){
             if(err) reject(err);
             resolve(result);
         });
     });
 }
 
-//Create MetadataList Table
-let createMetadataListTablePromise = ()=>{
+/*** Create MetadataCatalog Table */
+let createMetadataCatalogTablePromise = ()=>{
     return new Promise((resolve,reject)=>{
-        mySQLCon.query('CREATE TABLE MetadataList(createdById Varchar(255),createdByName Varchar(255),createdDate Varchar(255),fileName Varchar(255),fullName Varchar(255),id Varchar(255),lastModifiedById Varchar(255),lastModifiedByName Varchar(255),lastModifiedDate Varchar(255),manageableState Varchar(255),type Varchar(255))',function(err,result){
+        mySQLCon.query('CREATE TABLE MetadataCatalog(CreatedById Varchar(255),CreatedByName Varchar(255),CreatedDate Varchar(255),FileName Varchar(255),FullName Varchar(255),Id Varchar(255),LastModifiedById Varchar(255),LastModifiedByName Varchar(255),LastModifiedDate Varchar(255),ManageableState Varchar(255),Type Varchar(255))',function(err,result){
             if(err) reject(err);
             resolve(result);
         });
     });
 }
 
-
-//Salesforce API Get Methods
+/*** Salesforce API Get Methods */ 
 app.get('/',(req,res)=>{
     conn.query("SELECT Id,Name FROM Account",(err,result)=>{
         if(err){
@@ -449,41 +417,47 @@ app.get('/DescribeMetaData',(req,res)=>{
 })
 
 app.get("/MetadataList",(req,res)=>{
-    //console.log('Inside Metadata List::0' +req.query.mType );
-    var types = [{type : req.query.mType,folder:null}];
-    //console.log('Inside Metadata List::1');
-    conn.metadata.list(types,'52.0',function(err,metadata){
-        //console.log('Inside Metadata List::2');
-        
-        //let jsonResponse = res.json(metadata);
-        //console.log('Inside Metadata List::3' + JSON.stringify(metadata));
-        if(err){return console.error('err',err);}
-        if(metadata !== null && metadata !== undefined){
-            res.json(metadata);
-        }
-        
-        // var meta = metadata[0];
-        // console.log('metadata count : ' + metadata.length);
-        // console.log('createdById : ' + meta.createdById);
-        // console.log('createdByName : ' + meta.createdByName);
-        // console.log('createdDate : ' + meta.createdDate);
-        // console.log('fileName : ' + meta.fileName);
-        // console.log('fullName : ' + meta.fullName);
-        // console.log('id : ' + meta.id);
-        // console.log('lastModifiedById : ' + meta.lastModifiedById);
-        // console.log('lastModifiedByName : ' + meta.lastModifiedByName);
-        // console.log('lastModifiedDate : ' + meta.lastModifiedDate);
-        // console.log('manageableState : ' + meta.manageableState);
-        // console.log('namespacePrefix : ' + meta.namespacePrefix);
-        // console.log('type : ' + meta.type);
-    });
+    try{
+        console.log('Inside Metadata List::0' +req.query.mType );
+        var types = [{type : req.query.mType,folder:null}];
+        console.log('Inside Metadata List::1');
+        conn.metadata.list(types,'52.0',function(err,metadata){
+            console.log('Inside Metadata List::2');
+            
+            //let jsonResponse = res.json(metadata);
+            console.log('Inside Metadata List::3' + JSON.stringify(metadata));
+            if(err){return console.log('err',err);
+            }
+            if(metadata !== null && metadata !== undefined){
+                res.json(metadata);
+            }else{
+                let send=[];
+                res.json(send);
+            }
+        });
+
+    }catch(err){
+        console.log('error in calling::: ' + JSON.stringify(req) + ' ::: Error ::::' + err);
+    }
+    
 })
 
-app.get("/ReadProfile",(req,res)=>{
-    var pName = ['Admin'];
-    conn.metadata.read('Profile',pName,function(err,metadata){
-        res.json(metadata);
-        if(err){return console.error('err',err);}        
+app.get("/metadata",(req,res)=>{
+    let mType = req.query.type;
+    let mName = req.query.name;
+    conn.metadata.read(mType,mName,function(err,metadata){        
+        if(err){return console.error('err',err);}    
+        if(metadata !== null && metadata !== undefined){
+            //let tmpMap = new Map();
+            //tmpMap.set(mType,metadata);
+            //let tmpArray = [];
+            //tmpArray.push(mType);
+            //tmpArray.push([...metadata]);
+            res.json(metadata);
+        }else{
+            let send=[];
+            res.json(send);
+        }
     });
 })
 
