@@ -3,6 +3,12 @@
 import express from 'express';
 import jsforce from 'jsforce';
 
+//zip file readers libraries
+//import unzipper from 'unzipper';
+import yauzl from "yauzl";
+import path from "path";
+import base64 from "base64-arraybuffer";
+
 /**Read CSV File Library */
 import * as fs from 'fs';
 import fastCSV from 'fast-csv';
@@ -29,7 +35,8 @@ const PORT = SQL_PORT
 
 //Establish connection to Salesforce instance
 const conn = new jsforce.Connection({
-    loginUrl:SF_LOGIN_URL
+    loginUrl:SF_LOGIN_URL,
+    version:'47.0'
 })
 
 conn.login(SF_USERNAME,SF_PASSWORD+SF_TOKEN,(err,userInfo)=>{
@@ -101,13 +108,6 @@ let createSnapShotDB = async dbName =>{
 
     let objectsAndFields = [];
 
-
-    // const readableStream = fs.createReadStream("C:\\Daniel\\SalesforceProjects\\Nodejs\\MetadataTypesAndFields.csv", { encoding: 'utf8' });
-    // console.log(readableStream);
-    // await readableStreamEventPromise(readableStream).then(data=>{
-    //     console.log(data);
-    // });
-
     await readObjectsAndFieldsFile('C:\\Daniel\\SalesforceProjects\\Nodejs\\MetadataTypesAndFields.csv').then(data => {
         console.log('Inside csv reading method');
         console.log(data);
@@ -117,62 +117,32 @@ let createSnapShotDB = async dbName =>{
         console.error(error);
     });
 
-    // const readableStream = fs.createReadStream("C:\\Daniel\\SalesforceProjects\\Nodejs\\MetadataTypesAndFields.csv", { encoding: 'utf8' });
-
-    // readableStream.on("readable", () => {
-    //   let chunk;
-    //   while (null !== (chunk = readableStream.read())) {
-    //     console.log(`Received ${chunk.length} bytes of data.`);
-    //   }
-    // });
-    
-    // fastCSV
-    //     .parseStream(readableStream, options)
-    //     .on("error", (error) => {
-    //         console.log(error);
-    //     })
-    //     .on("data", (row) => {
-    //         data.push(row);
-    //     })
-    //     .on("end", (rowCount) => {
-    //     console.log('Inside csv reading method');
-    //     console.log(rowCount);
-    //     console.log(data);
-    //     });
-    
     /***2.1.2 Convert the list of tables and columns data into a Map where table name is the key and field names are array of values  */
-
+    let metadataTypeList = [];
     let objectsAndFieldsMap = convertObjectsAndFieldsToMap(objectsAndFields);
     if(objectsAndFieldsMap === null || objectsAndFieldsMap === undefined || objectsAndFieldsMap.size  === 0){
         console.log('Exiting from the Javascript execution as length of objectsAndFieldsMap is 0 or the objectsAndFieldsMap is null');
         process.exit(1);
+    }else{
+        metadataTypeList = Array.from(objectsAndFieldsMap.keys());
     }
-
-    /* 3. Call createMetadataTypesTablePromise to create the Salesforce MetadataType table in the DB*/
-    // await createMetadataTypesTablePromise().then((result)=>{
-    //     //console.log(':::: Table created successfully ::::' + JSON.stringify(result));
-    // });
-    
-    /* 4. Call below API to fetch all MetadataTypes from Salesforce*/
+   
+    /* 3. Call below API to fetch all MetadataTypes from Salesforce*/
     const response = await fetch(`http://127.0.0.1:${PORT}/DescribeMetaData`);
     let metaData = await response.json();
     //console.log(5);
     
-    /** 5. Insert Metadatatypes into MetadataTypes table */
-    let metadataTypeList = metaData.metadataObjects.map(obj=>obj.xmlName);
-    metadataTypeList = ['CustomObject'];
+    /** 4. Insert Metadatatypes into MetadataTypes table */
+    //let metadataTypeList = metaData.metadataObjects.map(obj=>obj.xmlName);
+    metadataTypeList = ['AuraDefinitionBundle'];
     //console.log(metadataTypeList);
     await insertMetadataTypes(metaData.metadataObjects).then((result)=>{
          //console.log('Record is inserted successfully');
          //console.log(JSON.stringify(result));
      });
-    
-    /** 6. Call promise that creates MetadataCatalog Table*/
-    // await createMetadataCatalogTablePromise().then((response)=>console.log('MetadataCatalog table created successfully'+JSON.stringify(response)));
+        
+    /*** 5 Prepare for MetadataCatalog Callout */
     let metadataCatalog = [];
-    
-    
-    /*** 6.1 Prepare for MetadataCatalog Callout */
     await callOutMetadataCatalogPromise(metaData.metadataObjects).then(
     result=>{
         metadataCatalog.push([...result])
@@ -180,15 +150,15 @@ let createSnapShotDB = async dbName =>{
     console.log('33333333:::')    
     console.log('MetadataCatalog Size :::' + metadataCatalog.flat().length);
     
-    // 7. Insert MetadataCatalog in MySQL database table
+    /** 6 Insert MetadataCatalog in MySQL database table*/
     await insertMetadataCatalog(metadataCatalog).then(result=>console.log('MetadataCatalog Insert Result ::::: '));
     
-    // 8. Create tables for individual Metadata Types using metadataCatalog
+    /** 7 Create tables for individual Metadata Types using metadataCatalog */
     
-    // 8.1 Create a set of metadata types
-    const mTypes = metadataCatalog[0].map(item => item.type);
+    /** 8.1 Create a set of metadata types */
+    //const mTypes = metadataCatalog[0].map(item => item.type);
     //console.log('mTypes ::: ' + JSON.stringify(mTypes));
-    let mTypeSet = [...new Set(mTypes)];
+    //let mTypeSet = [...new Set(mTypes)];
 
     /* 8.2 
         1. Iterate through MetaData Type Set
@@ -196,15 +166,14 @@ let createSnapShotDB = async dbName =>{
         3. Perform bulk parallel callouts for each metadata type
         4. Process the response of each MetadataType and insert the records into table
     */
-     let metadataResult = await callOutMetadataTypeAndName(metadataCatalog[0],mTypeSet);
+     let metadataResult = await callOutMetadataTypeAndName(metadataCatalog[0],metadataTypeList);
      
-    //Call handleMetadataResult method to process the result and create individual tables
+    /** 8.3 Call handleMetadataResult method to process the result and create individual tables */
     handleMetadaResult(metadataTypeList,metadataResult,objectsAndFieldsMap);
     
-    /*** Call custom object processing method */
+    /** 8.4 Call custom object processing method */
     // 8.3 
     //console.log('444444::::::');
-
 }
 
 /** Readable Stream Event promise */
@@ -220,23 +189,10 @@ let readableStreamEventPromise = (readableStream) => {
     });    
 }
 
-
 /**Read Metadata and Fields from file */
 let readObjectsAndFieldsFile = (filePath)=>{
     return new Promise((resolve, reject) => {
         let data=[];
-        // fastCSV
-        //     .parseStream(readableStream, options)
-        //     .on("error", (error) => {
-        //         reject(error);
-        //     })
-        //     .on("data", (row) => {
-        //         data.push(row);
-        //     })
-        //     .on("end", (rowCount) => {
-        //         resolve(data);
-        //     });
-
         fs.createReadStream(filePath)
         .pipe(csvParser({ encoding: 'utf8' }))
         .on('data', (row) => {
@@ -249,7 +205,6 @@ let readObjectsAndFieldsFile = (filePath)=>{
         });
     });
 }
-
 
 /**Convert list of Objects and Fields to Map*/
 let convertObjectsAndFieldsToMap = (data)=>{
@@ -284,16 +239,12 @@ let handleMetadaResult = (metadataTypeList,result,objectsAndFieldsMap)=>{
     })
 
     for(let key of metadataMap.keys()){
-        switch(key){
-            case 'CustomObject':
-                processCustomObject(result.map(obj=>obj?.value?.customType=='CustomObject'?obj:undefined).filter(value=>value!==undefined),'CustomObject',objectsAndFieldsMap.get('CustomObject'));
-                break;
-            case 'Profile':
-                processProfiles(result.map(obj=>obj?.value?.customType=='Profile'?obj:undefined).filter(value=>value!==undefined));
-                break;
-        }
+        processMetadataObjectsAndFields(
+            result.map(obj=>obj?.value?.customType==key?obj:undefined).filter(value=>value!==undefined)
+            ,key
+            ,objectsAndFieldsMap.get(key)
+        );                
     }
-
 }
 
 /***Create new database instance */
@@ -307,7 +258,6 @@ let createNewDB=(customDBName)=>{
                 console.error(`exec error: ${error}`);
                 reject(error);
             }
-            //resolve(stdout);
             //console.log(`stdout: ${stdout}`);
             //console.log(`stderr: ${stderr}`);
             fs.writeFileSync(`${TEMPLATE_DB}.sql`, stdout);
@@ -339,42 +289,28 @@ let createNewDB=(customDBName)=>{
 
 /**Process CustomObject, create table and insert data in MySQL */
 
-let processCustomObject = async (metaData,tableName,columns)=>{
-
+let processMetadataObjectsAndFields = async (metaData,objectName,fields)=>{
     console.log(metaData);
-    //insertCustomObject(metadata);
-    //await insertCustomObject(metadata).then(result=>console.log('Custom Object Created Susccessfully ::::: '));
-
-    // let tableName = 'customobject';
-    // let columns = ['actionOverrides', 'compactLayoutAssignment', 'enableFeeds', 'externalSharingModel', 'fields', 'fullName', 'label', 'listViews', 'sharingModel'];
-
-    // await insertIntoTable(tableName, columns, metaData).then(result => console.log(result)).catch(err => console.error(err));
-    //tableName = 'customobject';
-    //columns = ['actionOverrides', 'compactLayoutAssignment', 'enableFeeds', 'externalSharingModel', 'fields', 'fullName', 'label', 'listViews', 'sharingModel','searchLayouts'];
-    let values = mapValues(tableName,columns,metaData);//metaData.map(data => [JSON.stringify(data.value.actionOverrides), data.value.compactLayoutAssignment, data.value.enableFeeds ? 1 : 0, data.value.externalSharingModel, JSON.stringify(data.value.fields), data.value.fullName, data.value.label, JSON.stringify(data.value.listViews), data.value.sharingModel]);
-
-    await insertMetaData(tableName, columns, values)
+    let values = mapValues(objectName,fields,metaData);
+    await insertMetaData(objectName, fields, values)
         .then(result => {
-            console.log('Result::::' + `${tableName} data inserted successfully`);
+            console.log('Result::::' + `${objectName} data inserted successfully`);
         })
         .catch(err => {
             // handle the error
         });
 }
 
-function mapValues(tableName, columns, metaData) {
+function mapValues(objectName, fields, metaData) {
     let values = metaData.map(data => {
       let row = [];
-      columns.forEach(column => {
-        const str = column;
+      fields.forEach(field => {
+        const str = field;
         const parts = str.split('-');
         const col = parts[0];
         const dataType = parts[1];
         let value = data.value[col];
-        //if (typeof value === 'object') value = JSON.stringify(value);
         if (value === 'false' || value === 'true') value = (value==='true') ? 1 : 0;
-        //if (dataType === 'JSON' && !isValidJSON()) value = null;
-
         if (dataType === 'JSON'){
             if (typeof value === 'object'){
                 value = JSON.stringify(value);
@@ -382,9 +318,6 @@ function mapValues(tableName, columns, metaData) {
                 value = null;
             }
         }
-        
-        //if (dataType === 'JSON' && (value === undefined || value === null)){ let tmpJSON = [{"Key":"TestValue"}];value = JSON.stringify(tmpJSON);}
-        //if(column === 'searchLayouts') value = null;
         row.push(value);
       });
       return row;
@@ -392,67 +325,58 @@ function mapValues(tableName, columns, metaData) {
     return values;
   }
 
-  /** Verify if string is valid JSON object */
-  function isValidJSON(string) {
+    /** Verify if string is valid JSON object */
+    function isValidJSON(string) {
     try {
-      JSON.parse(string);
-      return true;
+        JSON.parse(string);
+        return true;
     } catch (error) {
-      return false;
+        return false;
     }
-  }
+    }
 
-
-
-/**Process Profiles, create table and insert data in MySQL */
-
-let processProfiles = (metadata)=>{
-
+    /**Process Profiles, create table and insert data in MySQL */
+    let processProfiles = (metadata)=>{
     //console.log(metadata);
-
-}
-
+    }
 
 /*** Callout to get Metadata of specific type*/
-let callOutMetadataTypeAndName = async (metadataCatalog,mTypeSet)=>{
-    // const keys = Object.keys(metadataCatalog);
-    mTypeSet = ['CustomObject'];
+let callOutMetadataTypeAndName = async (metadataCatalog,mTypeSet)=>{    
+    //mTypeSet = ['CustomObject','Profile'];
+    mTypeSet = ['AuraDefinitionBundle'];
     let urls = [];
     let finalResult=[];
-    // mTypeSet.forEach(async mtype=> {
-    //     const filteredData = metadataCatalog.filter(meta => meta.type == mtype);
-    //     //console.log('Filtered Values :::' + JSON.stringify(filteredData));
-    //     // const apiPromises = filteredData.map(item => {
-    //     //     const url = `http://127.0.0.1:${PORT}/metadata?type=${item.type}&name=${item.fullName}`;
-    //     //     return fetch(url).then(response => response.json());
-    //     // });
-    //     // await Promise.all(apiPromises).then(results => {
-    //     //     //console.log('Results convertJSONToTables :::' + JSON.stringify(results));
-    //     //   });
 
-    mTypeSet.forEach(async mtype=> {
-        const filteredData = metadataCatalog.filter(meta => meta.type == mtype);
-        //console.log('Filtered Values :::' + JSON.stringify(filteredData));
-        let tmpUrls = filteredData.map(item=>{
-            return {'type':mtype,'url':`http://127.0.0.1:${PORT}/metadata?type=${item.type}&name=${item.fullName}`}
-    });
-        urls.push([...tmpUrls]);
-    });
-    urls = urls.flat();
-    //console.log(urls);
-    await Promise.allSettled(
-        urls.map(urlObj=>fetch(urlObj.url).then(resp=>resp.json().then(obj=>{
-            let tmpObj = {...obj};
-            tmpObj['customType']=urlObj.type;
-            return tmpObj;
-        }))))
-        .then(requests=> finalResult = requests.flat()).catch(()=>null);
+    if(mTypeSet[0] === 'AuraDefinitionBundle'){
+        
+        await fetch(`http://127.0.0.1:${PORT}/metadataRetrieve`);
+    }else{
+        mTypeSet.forEach(async mtype=> {
+            const filteredData = metadataCatalog.filter(meta => meta.type == mtype);
+            //console.log('Filtered Values :::' + JSON.stringify(filteredData));
+            let tmpUrls = filteredData.map(item=>{
+                return {'type':mtype,'url':`http://127.0.0.1:${PORT}/metadata?type=${item.type}&name=${item.fullName}`}
+        });
+            urls.push([...tmpUrls]);
+        });
+        urls = urls.flat();
+        //console.log(urls);
+        await Promise.allSettled(
+            urls.map(urlObj=>fetch(urlObj.url).then(resp=>resp.json().then(obj=>{
+                let tmpObj = {...obj};
+                tmpObj['customType']=urlObj.type;
+                return tmpObj;
+            }))))
+            .then(requests=> finalResult = requests.flat()).catch(()=>null);
+    
+        //console.log('***********%%%%%%%%%%%%%%**********' + finalResult);
+    
+        return finalResult;
 
-    //console.log('***********%%%%%%%%%%%%%%**********' + finalResult);
 
-    return finalResult;
+    }
+    
 }
-
 
 /**MetadataCatalog Callout Promise*/
 let callOutMetadataCatalogPromise = async (metadata)=>{
@@ -488,74 +412,20 @@ let callOutMetadataCatalogPromise = async (metadata)=>{
     })
 }
 
-/**Insert Custom Object data into CustomObject Table*/
-// let insertCustomObject = (metaData)=>{    
-//     let sqlData = metaData;//JSON.stringify(metaData);
-//     let sql = `INSERT INTO customobject(actionOverrides,compactLayoutAssignment,enableFeeds,externalSharingModel,fields,fullName,label,listViews,sharingModel) values ?`;
-//     let prm;
-//     if(sqlData !== null && sqlData !== undefined){
-//         prm = new Promise((resolve,reject)=>{
-//                 mySQLCon.query(sql,
-//                 [sqlData.map(data=>[JSON.stringify(data.value.actionOverrides),data.value.compactLayoutAssignment,data.value.enableFeeds?1:0,data.value.externalSharingModel,JSON.stringify(data.value.fields),data.value.fullName,data.value.label,JSON.stringify(data.value.listViews),data.value.sharingModel])],
-//                 function(err, result){
-//                     if(err) reject(err);
-//                     resolve(result);
-//                 });        
-//         });
-//     }    
-//     return prm;
-// }
-// let insertCustomObject = (tableName, columns, data) => {
-//     let sql = `INSERT INTO ${tableName} (${columns.join(',')}) values ?`;
-//     let prm;
-//     if (data !== null && data !== undefined) {
-//         prm = new Promise((resolve, reject) => {
-//             mySQLCon.query(sql,
-//                 [data.map(row => columns.map(col => row[col]))],
-//                 function (err, result) {
-//                     if (err) reject(err);
-//                     resolve(result);
-//                 });
-//         });
-//     }
-//     return prm;
-// }
-
 let insertMetaData = (tableName, columns, values) => {
-
     let cols = columns.map(c=>{
         let parts = c.split('-');
         return parts[0];
     });
-
-    // values.map((val)=>{
-    //     isValidJSON(val)
-    // })
-    
-
     return new Promise((resolve, reject) => {
         let sql = `INSERT INTO ${tableName} (${cols.join(', ')}) VALUES ?`;
-        
-        //let formattedValues = values.map(value => value.map(val => val === 'JSON.NULL' ? {null} : val));
-
-        // mySQLCon.query(sql, [formattedValues], function(err, result) {
-        //     if (err) reject(err);
-        //     resolve(result);
-        // });
-
         console.log(values);
-
         mySQLCon.query(sql, [values.map(value => [...value])], function(err, result) {
             if (err) reject(err);
             resolve(result);
         });
     });
 };
-
-
-
-
-
 
 /**Insert metadata into MetadataCatalog Table*/
 let insertMetadataCatalog = (metaData)=>{    
@@ -778,8 +648,164 @@ app.get("/metadata",(req,res)=>{
             let send=[];
             res.json(send);
         }
-    });
+    });   
+
 })
+
+app.get("/metadataRetrieve",(req,res)=>{
+    conn.metadata.retrieve({
+        apiVersion: "47.0",
+        singlePackage: true,
+        unpackaged: {
+          types: [
+            {
+              members: "forgotPassword",
+              name: "AuraDefinitionBundle"
+            }
+          ]
+        }
+      })
+      .then(retrieveResult => {
+        console.log(`Retrieve result status: ${retrieveResult.state}`);
+        setTimeout(()=>{
+            console.log('Inside Set Timeout');
+        },100000);
+        return conn.metadata.checkRetrieveStatus(retrieveResult.id);
+      })
+      .then(async result => {
+        console.log(`Retrieve result status: ${result.status}`);
+        if (result.status === "Failed") {
+          console.error(result.errorMessage);
+          return;
+        }
+        //const directoryPath = "C:\\Daniel\\SalesforceProjects\\Nodejs\\dump";
+        const auraDefinitionBundle = result.fileProperties[0].fullName;
+        const fullNameStr = auraDefinitionBundle;
+        const index = fullNameStr.indexOf("/");
+        const fullName = fullNameStr.substring(0, index);
+        const auraDefinitionBundleContent = result.zipFile;
+        const fileName = fullName + ".zip";
+        const desiredFolder = fullName;
+        const extractionDirectory = fullName;
+
+        const directoryPath = `C:\\Daniel\\SalesforceProjects\\Nodejs\\dump\\${fileName}`;
+        const destDirectory = `C:\\Daniel\\SalesforceProjects\\Nodejs\\dump\\${fullName}`;
+
+        
+        fs.mkdir(destDirectory, (err) => {
+            if (err) {
+            console.error(err);
+            return;
+            }
+            console.log(`Directory created successfully at ${directoryPath}`);
+        });
+
+
+        // Convert base64 encoded zip file to binary data
+        const base64EncodedZipFile = result.zipFile;
+        const binaryZipFile = Buffer.from(base64EncodedZipFile, "base64");
+
+        // Write binary data to a file
+        fs.writeFileSync(directoryPath, binaryZipFile, "binary");
+
+        // Open the zip file
+        yauzl.open(directoryPath, { lazyEntries: true }, (err, zipfile) => {
+        if (err) throw err;
+
+        // Read the entries of the zip file
+        zipfile.readEntry();
+        zipfile.on("entry", (entry) => {
+            // Check if the entry is the specific folder
+            if (entry.fileName.startsWith("aura/forgotPassword/")) {
+            // Extract the entry and write to the destination directory
+            zipfile.openReadStream(entry, (err, readStream) => {
+                if (err) throw err;
+                const fileName = entry.fileName.substr("aura/forgotPassword/".length);
+                const destPath = `${destDirectory}\\${fileName}`;
+                readStream.pipe(fs.createWriteStream(destPath));
+                readStream.on("end", () => {
+                zipfile.readEntry();
+                });
+            });
+            } else {
+            zipfile.readEntry();
+            }
+        });
+
+        zipfile.on("end", () => {
+            console.log("Zip file extracted successfully!");
+        });
+        });
+        
+
+
+        /**Workking:: Start */
+        // const buffer = Buffer.from(auraDefinitionBundleContent, 'base64');        
+        // fs.writeFile(`${directoryPath}/${fileName}`, buffer, "binary", (error) => {
+        //   if (error) {
+        //     console.error(error);
+        //   } else {
+        //     console.log(`The file ${fileName} was saved successfully in ${directoryPath}!`);
+        //   }
+        // });
+        /** End:: */
+
+        //const encodedData = "Your encoded data here";
+        //const directoryPath = "C:\\your\\file\\directory\\path";
+        //const fileName = "yourFileName.zip";
+        
+        // fs.writeFile(`${directoryPath}\\${fileName}`, auraDefinitionBundleContent, "binary", (err) => {
+        //   if (err) {
+        //     console.error(err);
+        //   } else {
+        //     console.log(`The file ${fileName} was saved successfully!`);
+        //   }
+        // });
+
+
+
+        // await unzipper.Extract(Buffer.from(auraDefinitionBundleContent, 'binary'), {dir: directoryPath}, (err) => {
+        //         if (err) {
+        //         console.error(err);
+        //         } else {
+        //         console.log(`The file ${fileName} was saved successfully in ${directoryPath}!`);
+        //         }
+        //     });
+
+
+        // fs.writeFile(`${directoryPath}\\${fileName}`, auraDefinitionBundleContent, "binary", (err) => {
+        //   if (err) {
+        //     console.error(err);
+        //   } else {
+        //     console.log(`The file ${fileName} was saved successfully!`);
+        //   }
+        // });
+
+        // const fileProperties = result.fileProperties;
+        // const directoryPath = "C:\\Daniel\\SalesforceProjects\\Nodejs\\dump";
+        
+        // // Create the directory
+        // fs.mkdirSync(directoryPath, { recursive: true });
+        
+        // // Loop through the fileProperties array and save each file in the specified directory
+        // fileProperties.forEach(fileProperty => {
+        //   const fileName = fileProperty.fullName;
+        //   const fileContent = fileProperty.zipFile;
+        //   fs.writeFile(`${directoryPath}\${fileName}.txt`, fileContent, "binary", (err) => {
+        //     if (err) {
+        //       console.error(err);
+        //     } else {
+        //       console.log(`The file ${fileName} was saved successfully in ${directoryPath}!`);
+        //     }
+        //   });
+        // });
+
+      })
+      .catch(error => {
+        console.error(error);
+      });
+})
+
 
 app.listen(PORT, ()=>{
     console.log(`Server is running at http://127.0.0.1:${PORT}`)
